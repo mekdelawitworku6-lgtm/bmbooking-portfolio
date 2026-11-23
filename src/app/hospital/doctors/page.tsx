@@ -1,0 +1,718 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { useAppDispatch, useAppSelector } from '@/lib/hooks';
+import {
+  fetchHospitalDoctors,
+  updateDoctorStatus,
+  registerHospitalDoctor,
+  updateHospitalDoctor,
+  clearHospitalError,
+  type DoctorItem,
+} from '@/lib/store/slices/hospitalSlice';
+import { MedText } from '@/components/ui/med-text';
+import { MedCard } from '@/components/ui/med-card';
+import { MedInput } from '@/components/ui/med-input';
+import { Stethoscope, Check, X, Clock, Phone, Award, Plus, Loader2, Image as ImageIcon, Video as VideoIcon, Trash, Play, Pencil } from 'lucide-react';
+
+interface RegisterForm {
+  fullName: string;
+  phone: string;
+  email: string;
+  specialization: string;
+  licenseNumber: string;
+  experienceYears: string;
+  bio: string;
+  profilePicture: File | null;
+  introVideo: File | null;
+}
+
+const emptyRegister: RegisterForm = {
+  fullName: '',
+  phone: '',
+  email: '',
+  specialization: '',
+  licenseNumber: '',
+  experienceYears: '',
+  bio: '',
+  profilePicture: null,
+  introVideo: null,
+};
+
+export default function HospitalDoctorsPage() {
+  const dispatch = useAppDispatch();
+  const { token } = useAppSelector((s) => s.auth);
+  const { doctors, loading, error } = useAppSelector((s) => s.hospital);
+
+  const [tab, setTab] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [actioningId, setActioningId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectModal, setShowRejectModal] = useState<number | null>(null);
+  const [showRegister, setShowRegister] = useState(false);
+  const [videoDoc, setVideoDoc] = useState<{ fullName: string | null; introVideo: string | null } | null>(null);
+  const [registerForm, setRegisterForm] = useState<RegisterForm>(emptyRegister);
+  const [registerSaving, setRegisterSaving] = useState(false);
+  const [registerResult, setRegisterResult] = useState<string | null>(null);
+
+  const [editDoctor, setEditDoctor] = useState<DoctorItem | null>(null);
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    specialization: '',
+    licenseNumber: '',
+    experienceYears: '',
+    bio: '',
+  });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editPicture, setEditPicture] = useState<File | null>(null);
+  const [editPicturePreview, setEditPicturePreview] = useState('');
+  const [editPictureError, setEditPictureError] = useState('');
+
+  useEffect(() => {
+    if (token) {
+      dispatch(fetchHospitalDoctors());
+    }
+  }, [dispatch, token]);
+
+  const pendingDoctors = doctors.filter((d) => d.status === 'PendingReview');
+  const approvedDoctors = doctors.filter((d) => d.status === 'Approved');
+  const rejectedDoctors = doctors.filter((d) => d.status === 'Rejected');
+
+  const filteredDoctors =
+    tab === 'pending' ? pendingDoctors : tab === 'approved' ? approvedDoctors : rejectedDoctors;
+
+  const handleApprove = async (id: number) => {
+    setActioningId(id);
+    await dispatch(updateDoctorStatus({ id, status: 'Approved' }));
+    dispatch(clearHospitalError());
+    setActioningId(null);
+  };
+
+  const handleReject = async (id: number) => {
+    setActioningId(id);
+    await dispatch(updateDoctorStatus({ id, status: 'Rejected', rejectionReason: rejectReason || undefined }));
+    dispatch(clearHospitalError());
+    setShowRejectModal(null);
+    setRejectReason('');
+    setActioningId(null);
+  };
+
+  const closeRegister = () => {
+    setShowRegister(false);
+    setRegisterForm(emptyRegister);
+    setRegisterResult(null);
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!registerForm.fullName) return;
+    setRegisterSaving(true);
+    dispatch(clearHospitalError());
+    const fd = new FormData();
+    fd.append('fullName', registerForm.fullName.trim());
+    if (registerForm.phone) fd.append('phone', `+251${registerForm.phone.replace(/[^0-9]/g, '')}`);
+    if (registerForm.email) fd.append('email', registerForm.email.trim());
+    if (registerForm.specialization) fd.append('specialization', registerForm.specialization.trim());
+    if (registerForm.licenseNumber) fd.append('licenseNumber', registerForm.licenseNumber.trim());
+    if (registerForm.experienceYears) fd.append('experienceYears', registerForm.experienceYears);
+    if (registerForm.bio) fd.append('bio', registerForm.bio);
+    if (registerForm.profilePicture) fd.append('profilePicture', registerForm.profilePicture);
+    if (registerForm.introVideo) fd.append('introVideo', registerForm.introVideo);
+    const res = await dispatch(registerHospitalDoctor(fd));
+    if (registerHospitalDoctor.fulfilled.match(res)) {
+      const payload = res.payload as { tempPassword?: string } | undefined;
+      setRegisterResult(payload?.tempPassword ?? '');
+      dispatch(fetchHospitalDoctors());
+    }
+    setRegisterSaving(false);
+  };
+
+  const openEdit = (doc: DoctorItem) => {
+    setEditDoctor(doc);
+    setEditError('');
+    setEditPicture(null);
+    setEditPicturePreview(doc.profilePicture || '');
+    setEditPictureError('');
+    setEditForm({
+      fullName: doc.fullName || '',
+      specialization: doc.specialization || '',
+      licenseNumber: doc.licenseNumber || '',
+      experienceYears: doc.experienceYears != null ? String(doc.experienceYears) : '',
+      bio: doc.bio || '',
+    });
+  };
+
+  const closeEdit = () => {
+    setEditDoctor(null);
+    setEditError('');
+    setEditPicture(null);
+    setEditPicturePreview('');
+    setEditPictureError('');
+  };
+
+  const handleEditPictureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEditPictureError('');
+    if (!file.type.startsWith('image/')) {
+      setEditPictureError('Please select an image file');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setEditPictureError('Photo must be 10MB or smaller');
+      return;
+    }
+    setEditPicture(file);
+    const reader = new FileReader();
+    reader.onload = () => setEditPicturePreview(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editDoctor) return;
+    const payload: {
+      fullName?: string;
+      specialization?: string | null;
+      licenseNumber?: string | null;
+      experienceYears?: number | null;
+      bio?: string | null;
+    } = {};
+    if (editForm.fullName.trim() && editForm.fullName.trim() !== (editDoctor.fullName || '')) {
+      payload.fullName = editForm.fullName.trim();
+    }
+    if (editForm.specialization.trim() !== (editDoctor.specialization || '')) {
+      payload.specialization = editForm.specialization.trim() || null;
+    }
+    if (editForm.licenseNumber.trim() !== (editDoctor.licenseNumber || '')) {
+      payload.licenseNumber = editForm.licenseNumber.trim() || null;
+    }
+    const currentExp = editDoctor.experienceYears != null ? String(editDoctor.experienceYears) : '';
+    if (editForm.experienceYears.trim() !== currentExp) {
+      payload.experienceYears = editForm.experienceYears.trim() ? parseInt(editForm.experienceYears, 10) : null;
+    }
+    if (editForm.bio.trim() !== (editDoctor.bio || '')) {
+      payload.bio = editForm.bio.trim() || null;
+    }
+    if (Object.keys(payload).length === 0 && !editPicture) {
+      closeEdit();
+      return;
+    }
+    setEditSaving(true);
+    setEditError('');
+    dispatch(clearHospitalError());
+    let finalPayload: Record<string, unknown> | FormData = payload;
+    if (editPicture) {
+      const fd = new FormData();
+      Object.entries(payload).forEach(([key, value]) => {
+        if (value === null) fd.append(key, '');
+        else if (value !== undefined) fd.append(key, String(value));
+      });
+      fd.append('profilePicture', editPicture);
+      finalPayload = fd;
+    }
+    const res = await dispatch(updateHospitalDoctor({ id: editDoctor.id, payload: finalPayload }));
+    if (updateHospitalDoctor.fulfilled.match(res)) {
+      dispatch(fetchHospitalDoctors());
+      closeEdit();
+    } else {
+      setEditError((res.payload as string) || 'Failed to update doctor');
+    }
+    setEditSaving(false);
+  };
+
+  const tabs = [
+    { key: 'pending' as const, label: 'Pending', count: pendingDoctors.length },
+    { key: 'approved' as const, label: 'Approved', count: approvedDoctors.length },
+    { key: 'rejected' as const, label: 'Rejected', count: rejectedDoctors.length },
+  ];
+
+  return (
+    <div className="p-5 max-w-3xl mx-auto">
+      <div className="mb-6 flex justify-between items-start">
+        <div>
+          <MedText variant="h2" as="h2" className="text-[20px]">Doctors</MedText>
+          <MedText variant="body" className="text-text-secondary mt-1">
+            View and manage doctors at your hospital.
+          </MedText>
+        </div>
+        <button
+          onClick={() => setShowRegister(true)}
+          className="flex items-center gap-1.5 px-4 py-2.5 rounded-[12px] bg-primary text-white text-[13px] font-medium hover:bg-primary/90 transition-all"
+        >
+          <Plus size={16} /> Add Doctor
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-error text-[14px] font-semibold text-center mb-4 animate-in fade-in">{error}</p>
+      )}
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-5">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2 rounded-[12px] text-[13px] font-medium transition-all ${
+              tab === t.key
+                ? 'bg-primary text-white'
+                : 'bg-foreground/5 text-text-secondary hover:bg-foreground/10'
+            }`}
+          >
+            {t.label}
+            {t.count > 0 && (
+              <span className={`ml-1.5 text-[11px] ${tab === t.key ? 'text-white/80' : 'text-muted'}`}>
+                {t.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Reject Modal */}
+      {showRejectModal !== null && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-5">
+          <div className="bg-surface rounded-[16px] p-5 w-full max-w-sm shadow-lg">
+            <MedText variant="h2" as="h3" className="text-[16px] mb-2">Reject Doctor</MedText>
+            <MedText variant="body" className="text-text-secondary text-[13px] mb-4">
+              Optionally provide a reason for rejection.
+            </MedText>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Reason (optional)"
+              rows={3}
+              className="w-full border border-border rounded-[12px] px-3 py-2.5 text-[14px] bg-transparent placeholder:text-muted focus:outline-none focus:border-primary resize-none"
+            />
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => { setShowRejectModal(null); setRejectReason(''); }}
+                className="flex-1 py-2.5 rounded-[12px] bg-foreground/5 text-text-secondary text-[13px] font-medium hover:bg-foreground/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleReject(showRejectModal)}
+                disabled={actioningId === showRejectModal}
+                className="flex-1 py-2.5 rounded-[12px] bg-error text-white text-[13px] font-medium hover:bg-error/90 transition-all"
+              >
+                {actioningId === showRejectModal ? 'Rejecting...' : 'Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Intro Video Modal */}
+      {videoDoc && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-5" onClick={(e) => { if (e.target === e.currentTarget) setVideoDoc(null); }}>
+          <div className="bg-surface rounded-[16px] p-5 w-full max-w-lg shadow-lg">
+            <div className="flex justify-between items-center mb-4">
+              <MedText variant="h2" as="h3" className="text-[16px]">
+                {videoDoc.fullName || 'Doctor'}&apos;s Intro Video
+              </MedText>
+              <button onClick={() => setVideoDoc(null)} className="p-1.5 text-muted hover:text-text-secondary">
+                <X size={18} />
+              </button>
+            </div>
+            {videoDoc.introVideo ? (
+              <video controls autoPlay className="w-full rounded-[12px] bg-black max-h-[60vh]">
+                <source src={videoDoc.introVideo} type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+            ) : (
+              <MedText variant="body" className="text-text-secondary text-center py-8">
+                No intro video available.
+              </MedText>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Doctor Modal */}
+      {editDoctor && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-5" onClick={(e) => { if (e.target === e.currentTarget) closeEdit(); }}>
+          <div className="bg-surface rounded-[16px] p-6 w-full max-w-lg shadow-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <MedText variant="h2" as="h3" className="text-[18px]">Edit Doctor</MedText>
+              <button onClick={closeEdit} className="p-1.5 text-muted hover:text-text-secondary">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit}>
+              {editError && <p className="text-error text-[13px] font-semibold text-center mb-4">{editError}</p>}
+              <div className="flex items-center gap-4 mb-5">
+                {editPicturePreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={editPicturePreview} alt="Doctor photo" className="w-16 h-16 rounded-full object-cover bg-foreground/5 flex-shrink-0" />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-foreground/5 flex items-center justify-center flex-shrink-0">
+                    <ImageIcon size={22} className="text-muted" />
+                  </div>
+                )}
+                <div className="flex-1">
+                  <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-[12px] border border-border bg-surface text-[13px] font-medium text-text cursor-pointer hover:bg-foreground/5 transition-colors">
+                    <ImageIcon size={15} />
+                    {editPicturePreview ? 'Change photo' : 'Upload photo'}
+                    <input type="file" accept="image/*" onChange={handleEditPictureChange} className="hidden" />
+                  </label>
+                  {editPictureError && <p className="text-error text-[12px] mt-1.5">{editPictureError}</p>}
+                </div>
+              </div>
+              <MedInput
+                label="Full Name *"
+                placeholder="Dr. John Doe"
+                value={editForm.fullName}
+                onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+              />
+              <MedInput
+                label="Specialization"
+                placeholder="Cardiology"
+                value={editForm.specialization}
+                onChange={(e) => setEditForm({ ...editForm, specialization: e.target.value })}
+              />
+              <MedInput
+                label="License Number"
+                placeholder="LIC-12345"
+                value={editForm.licenseNumber}
+                onChange={(e) => setEditForm({ ...editForm, licenseNumber: e.target.value })}
+              />
+              <MedInput
+                label="Experience (years)"
+                type="number"
+                placeholder="5"
+                value={editForm.experienceYears}
+                onChange={(e) => setEditForm({ ...editForm, experienceYears: e.target.value.replace(/[^0-9]/g, '') })}
+              />
+              <div className="mb-5 w-full">
+                <label className="block text-[12px] font-medium mb-2 ml-1 text-muted">Bio</label>
+                <textarea
+                  rows={3}
+                  placeholder="Brief professional background..."
+                  value={editForm.bio}
+                  onChange={(e) => setEditForm({ ...editForm, bio: e.target.value })}
+                  className="w-full p-3 text-[16px] rounded-[12px] bg-surface border-[1.5px] border-border text-text placeholder:text-muted focus:outline-none focus:border-border-focus transition-colors resize-none"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={closeEdit}
+                  className="flex-1 py-3 rounded-[12px] bg-foreground/5 text-text-secondary text-[13px] font-medium hover:bg-foreground/10 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSaving || !editForm.fullName.trim()}
+                  className="flex-1 py-3 rounded-[12px] bg-primary text-white text-[13px] font-medium hover:bg-primary/90 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {editSaving && <Loader2 size={16} className="animate-spin" />}
+                  {editSaving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Register Doctor Modal */}
+      {showRegister && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-5">
+          <div className="bg-surface rounded-[16px] p-6 w-full max-w-lg shadow-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <MedText variant="h2" as="h3" className="text-[18px]">Add Doctor</MedText>
+              <button onClick={closeRegister} className="p-1.5 text-muted hover:text-text-secondary">
+                <X size={18} />
+              </button>
+            </div>
+
+            {registerResult !== null ? (
+              <div className="text-center py-6">
+                <Check size={36} className="text-success mx-auto mb-3" />
+                <MedText variant="h2" as="h3" className="text-[16px] mb-1">Doctor registered successfully!</MedText>
+                <MedText variant="body" className="text-text-secondary text-[13px] mb-3">
+                  Status: <strong>Pending Review</strong> — awaiting admin approval.
+                </MedText>
+                <div className="mb-5 text-text-secondary text-[13px]">
+                  Temp password: <code className="bg-foreground/5 px-2 py-0.5 rounded-[6px]">{registerResult}</code>
+                </div>
+                <button
+                  onClick={closeRegister}
+                  className="px-6 py-2.5 rounded-[12px] bg-primary text-white text-[13px] font-medium hover:bg-primary/90 transition-all"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRegister}>
+                <MedInput
+                  label="Full Name *"
+                  placeholder="Dr. John Doe"
+                  value={registerForm.fullName}
+                  onChange={(e) => setRegisterForm({ ...registerForm, fullName: e.target.value })}
+                />
+                <MedInput
+                  label="Phone"
+                  placeholder="912 345 678"
+                  value={registerForm.phone}
+                  maxLength={9}
+                  onChange={(e) => setRegisterForm({ ...registerForm, phone: e.target.value.replace(/[^0-9]/g, '') })}
+                />
+                <MedInput
+                  label="Email"
+                  type="email"
+                  placeholder="doctor@hospital.com"
+                  value={registerForm.email}
+                  onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                />
+                <MedInput
+                  label="Specialization"
+                  placeholder="Cardiology"
+                  value={registerForm.specialization}
+                  onChange={(e) => setRegisterForm({ ...registerForm, specialization: e.target.value })}
+                />
+                <MedInput
+                  label="License Number"
+                  placeholder="LIC-12345"
+                  value={registerForm.licenseNumber}
+                  onChange={(e) => setRegisterForm({ ...registerForm, licenseNumber: e.target.value })}
+                />
+                <MedInput
+                  label="Experience (years)"
+                  type="number"
+                  placeholder="5"
+                  value={registerForm.experienceYears}
+                  onChange={(e) => setRegisterForm({ ...registerForm, experienceYears: e.target.value })}
+                />
+                <div className="mb-5 w-full">
+                  <label className="block text-[12px] font-medium mb-2 ml-1 text-muted">Bio</label>
+                  <textarea
+                    rows={3}
+                    placeholder="Brief professional background..."
+                    value={registerForm.bio}
+                    onChange={(e) => setRegisterForm({ ...registerForm, bio: e.target.value })}
+                    className="w-full p-3 text-[16px] rounded-[12px] bg-surface border-[1.5px] border-border text-text placeholder:text-muted focus:outline-none focus:border-border-focus transition-colors resize-none"
+                  />
+                </div>
+
+                <div className="mb-5 w-full">
+                  <label className="block text-[12px] font-medium mb-2 ml-1 text-muted">Profile Picture</label>
+                  <div
+                    onClick={() => document.getElementById('hosp-doctor-pic')?.click()}
+                    className="border-2 border-dashed border-border rounded-[12px] p-4 text-center cursor-pointer bg-transparent hover:border-primary transition-colors"
+                  >
+                    <input
+                      id="hosp-doctor-pic"
+                      type="file"
+                      accept="image/jpeg,image/png"
+                      className="hidden"
+                      onChange={(e) => setRegisterForm({ ...registerForm, profilePicture: e.target.files?.[0] || null })}
+                    />
+                    {registerForm.profilePicture ? (
+                      <div className="flex items-center justify-center gap-3 text-[13px] text-text-secondary">
+                        <ImageIcon size={20} /> {registerForm.profilePicture.name}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setRegisterForm({ ...registerForm, profilePicture: null }); }}
+                          className="text-error"
+                        >
+                          <Trash size={16} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-muted">
+                        <ImageIcon size={28} className="mx-auto mb-2 opacity-50" />
+                        <p className="text-[13px]">Click to upload profile picture</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mb-6 w-full">
+                  <label className="block text-[12px] font-medium mb-2 ml-1 text-muted">Intro Video</label>
+                  <div
+                    onClick={() => document.getElementById('hosp-doctor-video')?.click()}
+                    className="border-2 border-dashed border-border rounded-[12px] p-4 text-center cursor-pointer bg-transparent hover:border-primary transition-colors"
+                  >
+                    <input
+                      id="hosp-doctor-video"
+                      type="file"
+                      accept="video/mp4,video/quicktime"
+                      className="hidden"
+                      onChange={(e) => setRegisterForm({ ...registerForm, introVideo: e.target.files?.[0] || null })}
+                    />
+                    {registerForm.introVideo ? (
+                      <div className="flex items-center justify-center gap-3 text-[13px] text-text-secondary">
+                        <VideoIcon size={20} /> {registerForm.introVideo.name}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setRegisterForm({ ...registerForm, introVideo: null }); }}
+                          className="text-error"
+                        >
+                          <Trash size={16} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-muted">
+                        <VideoIcon size={28} className="mx-auto mb-2 opacity-50" />
+                        <p className="text-[13px]">Click to upload intro video</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={closeRegister}
+                    className="flex-1 py-3 rounded-[12px] bg-foreground/5 text-text-secondary text-[13px] font-medium hover:bg-foreground/10 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={registerSaving || !registerForm.fullName}
+                    className="flex-1 py-3 rounded-[12px] bg-primary text-white text-[13px] font-medium hover:bg-primary/90 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {registerSaving && <Loader2 size={16} className="animate-spin" />}
+                    {registerSaving ? 'Adding...' : 'Add Doctor'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      {loading && !doctors.length ? (
+        <div className="text-center py-12">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+        </div>
+      ) : filteredDoctors.length === 0 ? (
+        <MedCard>
+          <div className="text-center py-6">
+            <Stethoscope size={28} className="text-muted mx-auto mb-3" />
+            <MedText variant="body" className="text-text-secondary">
+              {tab === 'pending'
+                ? 'No pending doctors waiting for review.'
+                : tab === 'approved'
+                ? 'No approved doctors yet.'
+                : 'No rejected doctors.'}
+            </MedText>
+          </div>
+        </MedCard>
+      ) : (
+        <div className="space-y-3">
+          {filteredDoctors.map((doc) => (
+            <MedCard key={doc.id}>
+              <div className="flex justify-between items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-foreground/5 flex items-center justify-center shrink-0 overflow-hidden border border-border">
+                      {doc.profilePicture ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={doc.profilePicture} alt={doc.fullName || 'Doctor'} className="w-full h-full object-cover" />
+                      ) : (
+                        <Award size={20} className="text-muted" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <MedText variant="body" className="text-[14px] font-medium">
+                        {doc.fullName || 'Unnamed Doctor'}
+                      </MedText>
+                      {doc.specialization && (
+                        <MedText variant="metadata" className="mt-0.5 flex items-center gap-1">
+                          <Award size={12} /> {doc.specialization}
+                        </MedText>
+                      )}
+                      {doc.experienceYears != null && (
+                        <MedText variant="metadata" className="flex items-center gap-1 mt-0.5">
+                          <Clock size={12} /> {doc.experienceYears} yrs exp
+                        </MedText>
+                      )}
+                    </div>
+                  </div>
+                  {doc.user?.phone && (
+                    <MedText variant="metadata" className="flex items-center gap-1 mt-2">
+                      <Phone size={12} /> {doc.user.phone}
+                    </MedText>
+                  )}
+                  <div className="flex items-center gap-3 mt-2">
+                    <span className={`inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full ${
+                      doc.status === 'Approved'
+                        ? 'bg-success/10 text-success'
+                        : doc.status === 'PendingReview'
+                        ? 'bg-warning/10 text-warning'
+                        : 'bg-error/10 text-error'
+                    }`}>
+                      {doc.status === 'Approved' && <Check size={12} />}
+                      {doc.status === 'PendingReview' && <Clock size={12} />}
+                      {doc.status === 'Rejected' && <X size={12} />}
+                      {doc.status === 'PendingReview' ? 'Pending' : doc.status}
+                    </span>
+                    {doc._count?.appointments != null && (
+                      <span className="text-[12px] text-muted">
+                        {doc._count.appointments} appointment{doc._count.appointments !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                  {doc.rejectionReason && (
+                    <MedText variant="metadata" className="text-error mt-1">
+                      Reason: {doc.rejectionReason}
+                    </MedText>
+                  )}
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex flex-col gap-2 shrink-0 items-end">
+                  <button
+                    onClick={() => openEdit(doc)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] bg-foreground/5 text-text-secondary text-[13px] font-medium hover:bg-foreground/10 transition-all"
+                  >
+                    <Pencil size={14} /> Edit
+                  </button>
+                  {doc.introVideo && (
+                    <button
+                      onClick={() => setVideoDoc({ fullName: doc.fullName ?? null, introVideo: doc.introVideo ?? null })}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] bg-blue/10 text-blue text-[13px] font-medium hover:bg-blue/20 transition-all"
+                    >
+                      <Play size={14} /> Intro Video
+                    </button>
+                  )}
+                  {doc.status === 'PendingReview' && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleApprove(doc.id)}
+                        disabled={actioningId === doc.id}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] bg-success/10 text-success text-[13px] font-medium hover:bg-success/20 transition-all"
+                      >
+                        {actioningId === doc.id ? (
+                          <span className="w-3.5 h-3.5 border-2 border-success border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Check size={14} />
+                        )}
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => setShowRejectModal(doc.id)}
+                        disabled={actioningId === doc.id}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] bg-error/10 text-error text-[13px] font-medium hover:bg-error/20 transition-all"
+                      >
+                        <X size={14} /> Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </MedCard>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

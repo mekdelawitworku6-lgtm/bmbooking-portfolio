@@ -1,0 +1,192 @@
+'use client';
+
+import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAppDispatch, useAppSelector } from '@/lib/hooks';
+import { fetchHospitals } from '@/lib/store/slices/hospitalSlice';
+import { MedText } from '@/components/ui/med-text';
+import { MedCard } from '@/components/ui/med-card';
+import { useI18n } from '@/lib/i18n/LanguageProvider';
+import LangSwitcher from '@/components/ui/lang-switcher';
+import { Search, ArrowRight, MapPin, Phone, Heart, Stethoscope, Brain, Baby, Bone, Eye, Cpu, Hospital, Navigation } from 'lucide-react';
+
+const SERVICES = [
+  { label: 'Cardiology', icon: Heart, service: 'Cardiology / Heart' },
+  { label: 'Dermatology', icon: Stethoscope, service: 'Dermatology / Skin' },
+  { label: 'Neurology', icon: Brain, service: 'Neurology / Brain & Nerves' },
+  { label: 'Pediatrics', icon: Baby, service: 'Pediatrics / Children' },
+  { label: 'Orthopedics', icon: Bone, service: 'Orthopedics / Bone & Joint' },
+  { label: 'Eye Care', icon: Eye, service: 'Eye Care / Ophthalmology' },
+];
+
+export default function PatientHomePage() {
+  const dispatch = useAppDispatch();
+  const router = useRouter();
+  const { t } = useI18n();
+  const { user } = useAppSelector((s) => s.auth);
+  const { hospitals, loading } = useAppSelector((s) => s.hospital);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    // If an unpaid booking is pending (e.g. the user just paid and came back
+    // to the home page), send them to My Appointments so it auto-finishes,
+    // then that page returns them here once it's done.
+    try {
+      const pending = JSON.parse(localStorage.getItem('bm_pending_booking') || 'null');
+      if (pending?.doctorId) {
+        router.replace('/patient/appointments');
+      }
+    } catch (e) { /* ignore */ }
+  }, [router]);
+
+  useEffect(() => {
+    if (!hospitals.length) {
+      dispatch(fetchHospitals());
+    }
+  }, [dispatch, hospitals.length]);
+
+  const filteredHospitals = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return hospitals;
+    return hospitals.filter(
+      (h) =>
+        h.name?.toLowerCase().includes(q) ||
+        h.address?.toLowerCase().includes(q) ||
+        (h.phone ?? '').toLowerCase().includes(q)
+    );
+  }, [hospitals, query]);
+
+  return (
+    <div className="p-5 max-w-3xl mx-auto">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-3 mb-6">
+        <div className="min-w-0 flex-1">
+          <MedText variant="metadata">{t('welcomeBack')}</MedText>
+          <MedText variant="h2" as="h2" className="mt-0.5 truncate">{user?.patientProfile?.fullName || user?.phone || 'Guest'}</MedText>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <LangSwitcher />
+          <Link href="/patient/equipment">
+            <div className="flex items-center justify-center gap-2 px-3.5 py-2 bg-foreground text-white rounded-[8px] hover:opacity-90 transition-opacity cursor-pointer">
+              <Cpu size={16} className="flex-shrink-0" />
+              <MedText variant="metadata" className="text-[12px] font-bold text-white leading-snug">{t('bookImaging')}</MedText>
+            </div>
+          </Link>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="flex items-center gap-3 bg-surface border border-border rounded-[12px] py-3 px-4 mb-8 hover:shadow-md transition-shadow">
+        <Search size={20} className="text-muted" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('searchHospitals')}
+          className="w-full bg-transparent outline-none text-[15px] text-text placeholder:text-muted"
+        />
+      </div>
+
+      {/* Services - compact horizontal */}
+      <div className="mb-6">
+        <div className="flex justify-between items-center mb-3">
+          <MedText variant="metadata" className="text-text-secondary text-[13px] tracking-[0.3px]">{t('services')}</MedText>
+          <Link href="/patient/services" className="text-[13px] text-primary font-medium flex items-center gap-0.5">
+            {t('viewAllServices')} <ArrowRight size={13} />
+          </Link>
+        </div>
+        <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+          {SERVICES.map((s) => (
+            <Link
+              key={s.service}
+              href={`/patient/services?service=${encodeURIComponent(s.service)}`}
+              className="flex flex-col items-center gap-1.5 flex-shrink-0"
+            >
+              <div className="w-14 h-14 rounded-[18px] bg-surface flex items-center justify-center shadow-sm border border-border/50 hover:scale-105 transition-transform">
+                <s.icon size={22} className="text-primary" />
+              </div>
+              <MedText variant="metadata" className="text-center text-[12px] leading-tight">{s.label}</MedText>
+            </Link>
+          ))}
+          <Link
+            href="/patient/services"
+            className="flex flex-col items-center justify-center gap-1.5 flex-shrink-0"
+          >
+            <div className="w-14 h-14 rounded-[18px] bg-primary/10 flex items-center justify-center border border-dashed border-primary/40 hover:scale-105 transition-transform">
+              <Search size={22} className="text-primary" />
+            </div>
+            <MedText variant="metadata" className="text-center text-[12px] leading-tight">{t('more')}</MedText>
+          </Link>
+        </div>
+      </div>
+
+      {/* Hospitals Grid */}
+      <div className="mb-8">
+        <div className="flex justify-between items-center mb-4">
+          <MedText variant="metadata" className="text-text-secondary text-[13px] tracking-[0.3px]">{t('hospitals')}</MedText>
+          <div className="flex items-center gap-2">
+            <Link href="/patient/services" className="flex items-center gap-1 px-3 py-1.5 rounded-full text-[12px] font-medium bg-surface border border-primary/40 text-primary hover:border-primary/70">
+              <Navigation size={13} />
+              {t('nearMe')}
+            </Link>
+            <MedText variant="metadata" className="text-muted">{t('available')}</MedText>
+          </div>
+        </div>
+
+        {loading && hospitals.length === 0 ? (
+          <div className="flex justify-center py-12">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : filteredHospitals.length === 0 ? (
+          <div className="text-center py-12">
+            <Hospital size={40} className="text-border mx-auto mb-3" />
+            <MedText variant="body" className="text-text-secondary">{t('noHospitalsFound')}</MedText>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {filteredHospitals.map((h) => (
+              <Link key={h.id} href={`/patient/hospitals/${h.id}`}>
+                <MedCard className="h-full hover:shadow-md transition-shadow">
+                  <div className="flex gap-3">
+                    <div className="w-16 h-16 rounded-[12px] bg-primary/10 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                      {h.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={h.image} alt={h.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <Hospital size={28} className="text-primary" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <MedText variant="body" className="text-[16px] font-medium text-text truncate">{h.name}</MedText>
+                      {h.address && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <MapPin size={12} className="text-muted flex-shrink-0" />
+                          <MedText variant="metadata" className="truncate">{h.address}</MedText>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1 mt-1">
+                        <Stethoscope size={12} className="text-muted" />
+                        <MedText variant="metadata">{t('doctorsCount', { n: h.doctorCount || 0 })}</MedText>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-4">
+                    <div className="text-[12px] text-primary font-medium flex items-center gap-1">
+                      {t('viewHospital')} <ArrowRight size={12} />
+                    </div>
+                    {h.phone && (
+                      <div className="flex items-center gap-1 text-muted">
+                        <Phone size={12} />
+                        <MedText variant="metadata">{h.phone}</MedText>
+                      </div>
+                    )}
+                  </div>
+                </MedCard>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

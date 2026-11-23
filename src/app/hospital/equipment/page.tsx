@@ -1,0 +1,729 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { useAppDispatch, useAppSelector } from '@/lib/hooks';
+import {
+  fetchHospitalEquipment,
+  addHospitalEquipmentBulk,
+  deleteHospitalEquipment,
+  toggleHospitalEquipmentStatus,
+  updateHospitalEquipment,
+  fetchEquipmentBookings,
+  confirmEquipmentBooking,
+  declineEquipmentBooking,
+  completeEquipmentBooking,
+  cancelEquipmentBooking,
+  rescheduleEquipmentBooking,
+} from '@/lib/store/slices/hospitalSlice';
+import type { EquipmentBookingItem } from '@/lib/store/slices/hospitalSlice';
+import { api } from '@/lib/api/client';
+import { MedText } from '@/components/ui/med-text';
+import { MedCard } from '@/components/ui/med-card';
+import { Scissors, Plus, Pencil, Trash2, X, Loader2, CalendarDays, CheckCircle2, XCircle, Clock, CalendarClock } from 'lucide-react';
+
+interface EqForm {
+  id: number | null;
+  name: string;
+  category: string;
+  price: string;
+  duration: string;
+  description: string;
+}
+
+const emptyForm: EqForm = { id: null, name: '', category: '', price: '', duration: '60', description: '' };
+
+const CATEGORIES = [
+  { value: 'MRI', label: 'MRI' },
+  { value: 'CT_SCAN', label: 'CT Scan' },
+  { value: 'DIALYSIS', label: 'Dialysis' },
+  { value: 'ULTRASOUND', label: 'Ultrasound' },
+  { value: 'XRAY', label: 'X-Ray' },
+  { value: 'VENTILATOR', label: 'Ventilator' },
+  { value: 'ECG', label: 'ECG' },
+  { value: 'MAMMOGRAPHY', label: 'Mammography' },
+  { value: 'DEFIBRILLATOR', label: 'Defibrillator' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+interface EqDraftRow {
+  key: number;
+  category: string;
+  doctorName: string;
+  availableFrom: string;
+  price: string;
+  duration: string;
+  description: string;
+}
+
+const emptyDraftRow = (key: number): EqDraftRow => ({ key, category: 'OTHER', doctorName: '', availableFrom: '', price: '', duration: '30', description: '' });
+
+type DayHours = { start: string; end: string; enabled: boolean };
+type WorkingHours = Record<string, DayHours>;
+
+const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
+
+const defaultHours = (): WorkingHours => {
+  const hours: WorkingHours = {};
+  for (const day of DAY_KEYS) {
+    hours[day] = day === 'saturday' || day === 'sunday'
+      ? { start: '08:00', end: '13:00', enabled: true }
+      : { start: '08:00', end: '17:00', enabled: true };
+  }
+  return hours;
+};
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function todayStr() {
+  const now = new Date();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${m}-${d}`;
+}
+
+function toDateInput(iso?: string) {
+  if (!iso) return todayStr();
+  const d = new Date(iso);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+type Slot = { start: string; end: string; booked: boolean };
+
+export default function HospitalEquipmentPage() {
+  const dispatch = useAppDispatch();
+  const { token } = useAppSelector((s) => s.auth);
+  const { equipment, equipmentBookings, loading, error } = useAppSelector((s) => s.hospital);
+
+  const [tab, setTab] = useState<'equipment' | 'bookings'>('equipment');
+  const [bookingDate, setBookingDate] = useState(todayStr());
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState<EqForm>(emptyForm);
+  const [draftRows, setDraftRows] = useState<EqDraftRow[]>([]);
+  const [hours, setHours] = useState<WorkingHours>(defaultHours);
+  const [nextRowKey, setNextRowKey] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [declineId, setDeclineId] = useState<number | null>(null);
+  const [declineReason, setDeclineReason] = useState('');
+  const [rescheduleTarget, setRescheduleTarget] = useState<EquipmentBookingItem | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState(todayStr());
+  const [rescheduleSlots, setRescheduleSlots] = useState<Slot[]>([]);
+  const [rescheduleSlot, setRescheduleSlot] = useState('');
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState('');
+
+  useEffect(() => {
+    if (token) {
+      dispatch(fetchHospitalEquipment());
+      dispatch(fetchEquipmentBookings({ date: bookingDate }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch, token]);
+
+  const reloadBookings = () => dispatch(fetchEquipmentBookings({ date: bookingDate }));
+
+  const openCreate = () => {
+    setForm(emptyForm);
+    setDraftRows([emptyDraftRow(nextRowKey)]);
+    setNextRowKey((k) => k + 1);
+    setHours(defaultHours());
+    setShowModal(true);
+  };
+
+  const openEdit = (e: any) => {
+    setForm({
+      id: e.id,
+      name: e.name,
+      category: e.category || '',
+      price: e.price != null ? String(e.price) : '',
+      duration: e.duration != null ? String(e.duration) : '60',
+      description: e.description || '',
+    });
+    setShowModal(true);
+  };
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    try {
+      if (form.id) {
+        await dispatch(updateHospitalEquipment({
+          id: form.id,
+          name: form.name.trim(),
+          category: form.category.trim() || undefined,
+          price: form.price ? Number(form.price) : null,
+          duration: form.duration ? Number(form.duration) : null,
+          description: form.description.trim() ? form.description.trim() : null,
+        })).unwrap();
+      } else {
+        const items = draftRows
+          .map((r) => ({
+            name: CATEGORIES.find((c) => c.value === r.category)?.label || r.category,
+            category: r.category,
+            doctorName: r.doctorName.trim() || undefined,
+            availableFrom: r.availableFrom || undefined,
+            operatingHours: hours,
+            price: r.price ? Number(r.price) : undefined,
+            duration: r.duration ? Number(r.duration) : 30,
+            description: r.description.trim() || undefined,
+          }));
+        await dispatch(addHospitalEquipmentBulk(items)).unwrap();
+        await dispatch(fetchHospitalEquipment());
+      }
+      setShowModal(false);
+    } catch {
+      // Keep the modal open; the error is shown inside it via the `error` banner.
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (window.confirm('Delete this equipment item?')) {
+      await dispatch(deleteHospitalEquipment(id));
+    }
+  };
+
+  const bookingAction = (id: number, action: 'confirm' | 'complete' | 'cancel') => {
+    if (action === 'confirm') dispatch(confirmEquipmentBooking(id)).then(reloadBookings);
+    if (action === 'complete') dispatch(completeEquipmentBooking(id)).then(reloadBookings);
+    if (action === 'cancel') {
+      if (window.confirm('Cancel this equipment booking?')) dispatch(cancelEquipmentBooking(id)).then(reloadBookings);
+    }
+  };
+
+  const submitDecline = async () => {
+    if (declineId == null) return;
+    if (!declineReason.trim()) return;
+    await dispatch(declineEquipmentBooking({ id: declineId, reason: declineReason.trim() }));
+    setDeclineId(null);
+    setDeclineReason('');
+    reloadBookings();
+  };
+
+  const loadRescheduleSlots = async (equipmentId: number, date: string, bookingId?: number) => {
+    setRescheduleLoading(true);
+    setRescheduleError('');
+    setRescheduleSlot('');
+    try {
+      const res = await api.get(`/equipment/${equipmentId}/availability`, {
+        params: { date, ...(bookingId ? { excludeBookingId: bookingId } : {}) },
+      });
+      setRescheduleSlots(res.data?.data?.slots || []);
+    } catch (err) {
+      const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      setRescheduleSlots([]);
+      setRescheduleError(message || 'Failed to load slots');
+    } finally {
+      setRescheduleLoading(false);
+    }
+  };
+
+  const openReschedule = (b: EquipmentBookingItem) => {
+    setRescheduleTarget(b);
+    const date = toDateInput(b.dateTime);
+    setRescheduleDate(date);
+    loadRescheduleSlots(b.equipmentId, date, b.id);
+  };
+
+  const submitReschedule = async () => {
+    if (!rescheduleTarget || !rescheduleDate || !rescheduleSlot) return;
+    setRescheduleSaving(true);
+    setRescheduleError('');
+    try {
+      await dispatch(rescheduleEquipmentBooking({
+        id: rescheduleTarget.id,
+        dateTime: `${rescheduleDate}T${rescheduleSlot}:00+03:00`,
+      })).unwrap();
+      setRescheduleTarget(null);
+      reloadBookings();
+    } catch (err) {
+      setRescheduleError(typeof err === 'string' ? err : 'Failed to reschedule booking');
+    } finally {
+      setRescheduleSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-5 lg:p-6 max-w-6xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl bg-primary/10 border border-border flex items-center justify-center">
+            <Scissors size={20} className="text-primary" />
+          </div>
+          <div>
+            <MedText variant="h2" as="h2" className="text-[20px]">Medical Equipment</MedText>
+            <MedText variant="metadata">Manage equipment inventory and bookings</MedText>
+          </div>
+        </div>
+        <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white text-[13px] font-semibold hover:opacity-90 transition-opacity">
+          <Plus size={16} /> Add Equipment
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 px-4 py-3 rounded-xl bg-error/5 border border-error/20 text-error text-[13px]">{error}</div>
+      )}
+
+      <div className="flex gap-2 mb-5">
+        <button
+          onClick={() => setTab('equipment')}
+          className={`px-3 py-1.5 rounded-full text-[12px] font-medium ${tab === 'equipment' ? 'bg-primary text-white' : 'bg-surface text-text-secondary border border-border'}`}
+        >
+          Equipment ({equipment.length})
+        </button>
+        <button
+          onClick={() => setTab('bookings')}
+          className={`px-3 py-1.5 rounded-full text-[12px] font-medium ${tab === 'bookings' ? 'bg-primary text-white' : 'bg-surface text-text-secondary border border-border'}`}
+        >
+          Bookings ({equipmentBookings.length})
+        </button>
+      </div>
+
+      {tab === 'equipment' ? (
+        loading && equipment.length === 0 ? (
+          <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+        ) : equipment.length === 0 ? (
+          <MedCard className="p-10 text-center text-text-secondary">No equipment yet. Add your first piece of equipment.</MedCard>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {equipment.map((e) => (
+              <MedCard key={e.id} className="p-5 flex flex-col">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="min-w-0">
+                    <MedText variant="body" className="text-[15px] font-semibold text-text truncate">{e.name}</MedText>
+                    {e.category && <MedText variant="metadata" className="capitalize">{e.category}</MedText>}
+                  </div>
+                  <button
+                    onClick={() => dispatch(toggleHospitalEquipmentStatus({ id: e.id, isOperational: !e.isOperational }))}
+                    className={`px-2 py-1 rounded-full text-[11px] font-medium ${e.isOperational ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}
+                    title="Toggle operational status"
+                  >
+                    {e.isOperational ? 'Operational' : 'Maintenance'}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-text-secondary mb-3">
+                  <span className="flex items-center gap-1.5"><Clock size={13} className="text-primary" />{e.duration != null ? `${e.duration} min` : '—'}</span>
+                  <span className="flex items-center gap-1.5"><Scissors size={13} className="text-primary" />{e.price != null ? `ETB ${Number(e.price).toLocaleString()}` : '—'}</span>
+                </div>
+
+                {e.description && <div className="text-[12px] text-muted mb-2 line-clamp-2">{e.description}</div>}
+
+                <div className="mt-auto pt-3 border-t border-border flex items-center justify-end gap-1.5">
+                  <button onClick={() => openEdit(e)} className="p-1.5 rounded-[8px] text-text-secondary hover:bg-foreground/5 hover:text-primary" title="Edit">
+                    <Pencil size={15} />
+                  </button>
+                  <button onClick={() => handleDelete(e.id)} className="p-1.5 rounded-[8px] text-text-secondary hover:bg-error-bg hover:text-error" title="Delete">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </MedCard>
+            ))}
+          </div>
+        )
+      ) : (
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <label className="flex items-center gap-2 text-[13px] text-text-secondary">
+              <CalendarDays size={15} className="text-primary" />
+              Date
+            </label>
+            <input
+              type="date"
+              value={bookingDate}
+              onChange={(e) => {
+                setBookingDate(e.target.value);
+                dispatch(fetchEquipmentBookings({ date: e.target.value }));
+              }}
+              className="h-10 px-3 rounded-lg border border-border bg-surface text-[14px] focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          {equipmentBookings.length === 0 ? (
+            <MedCard className="p-10 text-center text-text-secondary">No bookings for this date.</MedCard>
+          ) : (
+            <div className="space-y-3">
+              {equipmentBookings.map((b) => {
+                const canReview = b.status === 'pending';
+                return (
+                  <MedCard key={b.id} className="p-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <MedText variant="body" className="text-[14px] font-semibold text-text">
+                            {b.equipment?.name || 'Equipment'}
+                          </MedText>
+                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium capitalize
+                            ${b.status === 'confirmed' || b.status === 'completed' ? 'bg-success/10 text-success' : ''}
+                            ${b.status === 'declined' || b.status === 'cancelled' ? 'bg-error/10 text-error' : ''}
+                            ${b.status === 'pending' ? 'bg-warning/10 text-warning' : ''}`}
+                          >
+                            {b.status}
+                          </span>
+                        </div>
+                        <MedText variant="metadata">
+                          {b.patient?.patientProfile?.fullName || b.patient?.phone || 'Patient'}
+                          {b.dateTime ? ` — ${new Date(b.dateTime).toLocaleString()}` : ''}
+                        </MedText>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {canReview && (
+                          <>
+                            <button onClick={() => bookingAction(b.id, 'confirm')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 text-success text-[12px] font-medium hover:bg-success/20">
+                              <CheckCircle2 size={14} /> Confirm
+                            </button>
+                            <button onClick={() => { setDeclineId(b.id); setDeclineReason(''); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-error/10 text-error text-[12px] font-medium hover:bg-error/20">
+                              <XCircle size={14} /> Decline
+                            </button>
+                          </>
+                        )}
+                        {b.status === 'confirmed' && (
+                          <button onClick={() => bookingAction(b.id, 'complete')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-[12px] font-medium hover:bg-primary/20">
+                            <CheckCircle2 size={14} /> Mark Complete
+                          </button>
+                        )}
+                        {(b.status === 'pending' || b.status === 'confirmed') && (
+                          <button onClick={() => openReschedule(b)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-foreground/5 text-text-secondary text-[12px] font-medium hover:bg-primary/10 hover:text-primary">
+                            <CalendarClock size={14} /> Reschedule
+                          </button>
+                        )}
+                        {(b.status === 'pending' || b.status === 'confirmed') && (
+                          <button onClick={() => bookingAction(b.id, 'cancel')} className="p-1.5 rounded-lg text-text-secondary hover:bg-error-bg hover:text-error" title="Cancel">
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {b.notes && <div className="mt-2 text-[12px] text-muted">{b.notes}</div>}
+                  </MedCard>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Equipment modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface rounded-2xl p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <MedText variant="body" className="text-[17px] font-bold text-text">{form.id ? 'Edit Equipment' : 'Add Equipment'}</MedText>
+              <button onClick={() => setShowModal(false)} className="p-1.5 rounded-lg hover:bg-foreground/5"><X size={18} /></button>
+            </div>
+
+            {error && (
+              <div className="mb-4 px-3 py-2 rounded-lg bg-error/5 border border-error/20 text-error text-[13px]">{error}</div>
+            )}
+
+            {form.id ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Name *</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="e.g. MRI Scanner"
+                    className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Category</label>
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                  >
+                    <option value="">Select category</option>
+                    {CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Price (ETB)</label>
+                    <input
+                      type="number"
+                      value={form.price}
+                      onChange={(e) => setForm({ ...form, price: e.target.value })}
+                      placeholder="e.g. 250"
+                      className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Duration (min)</label>
+                    <input
+                      type="number"
+                      value={form.duration}
+                      onChange={(e) => setForm({ ...form, duration: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Description</label>
+                  <textarea
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                    rows={3}
+                    className="w-full p-3 rounded-xl border border-border bg-surface text-[14px] focus:outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <MedText variant="metadata">Services to add</MedText>
+                  <button
+                    onClick={() => { setDraftRows((rows) => [...rows, emptyDraftRow(nextRowKey)]); setNextRowKey((k) => k + 1); }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border text-[12px] font-medium text-primary hover:bg-primary/5"
+                  >
+                    <Plus size={13} /> Add Another Service
+                  </button>
+                </div>
+                {draftRows.map((row, i) => (
+                  <div key={row.key} className="rounded-xl border border-border p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <MedText variant="metadata">Service {i + 1}</MedText>
+                      <button
+                        onClick={() => setDraftRows((rows) => rows.filter((r) => r.key !== row.key))}
+                        disabled={draftRows.length === 1}
+                        className="p-1 rounded-lg text-text-secondary hover:bg-error-bg hover:text-error disabled:opacity-30"
+                        title="Remove"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Doctor Name</label>
+                        <input
+                          type="text"
+                          value={row.doctorName}
+                          onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, doctorName: e.target.value } : r))}
+                          placeholder="e.g. Dr. Alemu"
+                          className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Available From</label>
+                        <input
+                          type="date"
+                          value={row.availableFrom}
+                          onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, availableFrom: e.target.value } : r))}
+                          className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Category</label>
+                      <select
+                        value={row.category}
+                        onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, category: e.target.value } : r))}
+                        className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>{c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Price (ETB)</label>
+                        <input
+                          type="number"
+                          value={row.price}
+                          onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, price: e.target.value } : r))}
+                          placeholder="e.g. 250"
+                          className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Duration (min)</label>
+                        <input
+                          type="number"
+                          value={row.duration}
+                          onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, duration: e.target.value } : r))}
+                          className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Description</label>
+                      <textarea
+                        value={row.description}
+                        onChange={(e) => setDraftRows((rows) => rows.map((r) => r.key === row.key ? { ...r, description: e.target.value } : r))}
+                        rows={2}
+                        placeholder="Optional description"
+                        className="w-full p-3 rounded-xl border border-border bg-surface text-[14px] focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div className="rounded-xl border border-border p-3 space-y-3">
+                  <MedText variant="metadata">Working Hours</MedText>
+                  <div className="space-y-2">
+                    {DAY_KEYS.map((day) => {
+                      const h = hours[day];
+                      return (
+                        <div key={day} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={h.enabled}
+                            onChange={(e) => setHours((prev) => ({ ...prev, [day]: { ...prev[day], enabled: e.target.checked } }))}
+                            className="w-4 h-4 accent-primary"
+                          />
+                          <span className="w-20 text-[12px] font-medium text-text capitalize">{day}</span>
+                          <input
+                            type="time"
+                            value={h.start}
+                            disabled={!h.enabled}
+                            onChange={(e) => setHours((prev) => ({ ...prev, [day]: { ...prev[day], start: e.target.value } }))}
+                            className="flex-1 h-9 px-2 rounded-lg border border-border bg-surface text-[13px] focus:outline-none focus:border-primary disabled:opacity-50"
+                          />
+                          <span className="text-text-secondary text-[12px]">–</span>
+                          <input
+                            type="time"
+                            value={h.end}
+                            disabled={!h.enabled}
+                            onChange={(e) => setHours((prev) => ({ ...prev, [day]: { ...prev[day], end: e.target.value } }))}
+                            className="flex-1 h-9 px-2 rounded-lg border border-border bg-surface text-[13px] focus:outline-none focus:border-primary disabled:opacity-50"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-muted">Unchecked days are off-duty. Working hours apply to all services being added.</p>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6">
+              <button
+                onClick={handleSubmit}
+                disabled={saving || (form.id ? !form.name.trim() : draftRows.length === 0)}
+                className="w-full py-3 rounded-xl bg-primary text-white text-[14px] font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={16} className="animate-spin" /> : null}
+                {form.id ? 'Save Changes' : 'Add Services'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Decline modal */}
+      {declineId != null && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={() => setDeclineId(null)}>
+          <div className="w-full max-w-sm bg-surface rounded-2xl p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <MedText variant="body" className="text-[17px] font-bold text-text mb-4">Decline Booking</MedText>
+            <textarea
+              value={declineReason}
+              onChange={(e) => setDeclineReason(e.target.value)}
+              rows={3}
+              placeholder="Reason for declining"
+              className="w-full p-3 rounded-xl border border-border bg-surface text-[14px] focus:outline-none focus:border-error"
+            />
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => setDeclineId(null)} className="flex-1 py-2.5 rounded-xl border border-border text-[13px] font-medium text-text-secondary">
+                Cancel
+              </button>
+              <button
+                onClick={submitDecline}
+                disabled={!declineReason.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-error text-white text-[13px] font-semibold disabled:opacity-50"
+              >
+                Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Reschedule modal */}
+      {rescheduleTarget && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={() => setRescheduleTarget(null)}>
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface rounded-2xl p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <MedText variant="body" className="text-[17px] font-bold text-text">Reschedule Booking</MedText>
+                <MedText variant="metadata">
+                  {rescheduleTarget.patient?.patientProfile?.fullName || rescheduleTarget.patient?.phone || 'Patient'} — {rescheduleTarget.equipment?.name || 'Equipment'}
+                </MedText>
+              </div>
+              <button onClick={() => setRescheduleTarget(null)} className="p-1.5 rounded-lg hover:bg-foreground/5"><X size={18} /></button>
+            </div>
+
+            {rescheduleError && (
+              <div className="mb-4 px-3 py-2 rounded-lg bg-error/5 border border-error/20 text-error text-[13px]">{rescheduleError}</div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">New Date</label>
+              <input
+                type="date"
+                value={rescheduleDate}
+                onChange={(e) => {
+                  setRescheduleDate(e.target.value);
+                  if (rescheduleTarget) loadRescheduleSlots(rescheduleTarget.equipmentId, e.target.value, rescheduleTarget.id);
+                }}
+                className="w-full h-11 px-3 rounded-xl border border-border bg-surface text-[15px] focus:outline-none focus:border-primary"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-[12px] font-medium text-muted mb-1.5 ml-1">Available Slots</label>
+              {rescheduleLoading ? (
+                <div className="flex items-center gap-2 text-[13px] text-text-secondary py-2">
+                  <Loader2 size={14} className="animate-spin" /> Loading slots...
+                </div>
+              ) : rescheduleSlots.length === 0 ? (
+                <div className="text-[13px] text-text-secondary py-2">No available slots for this date.</div>
+              ) : (
+                <div className="flex flex-wrap gap-2 max-h-[200px] overflow-y-auto">
+                  {rescheduleSlots.map((slot, i) => {
+                    const isSelected = rescheduleSlot === slot.start;
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        disabled={slot.booked}
+                        onClick={() => !slot.booked && setRescheduleSlot(slot.start)}
+                        className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-all ${
+                          slot.booked
+                            ? 'bg-foreground/5 text-muted line-through cursor-not-allowed'
+                            : isSelected
+                              ? 'bg-primary text-white'
+                              : 'bg-foreground/5 text-text-secondary hover:bg-foreground/10'
+                        }`}
+                      >
+                        {slot.start}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setRescheduleTarget(null)} className="flex-1 py-2.5 rounded-xl border border-border text-[13px] font-medium text-text-secondary">
+                Cancel
+              </button>
+              <button
+                onClick={submitReschedule}
+                disabled={rescheduleSaving || !rescheduleDate || !rescheduleSlot}
+                className="flex-1 py-2.5 rounded-xl bg-primary text-white text-[13px] font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {rescheduleSaving ? <Loader2 size={15} className="animate-spin" /> : null}
+                {rescheduleSaving ? 'Saving...' : 'Reschedule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
