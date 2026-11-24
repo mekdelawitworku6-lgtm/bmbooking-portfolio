@@ -17,8 +17,13 @@ run the app without any manual configuration.
 | Setting | Value |
 | --- | --- |
 | Runtime | Node (Node 22) |
-| Build | `npm ci && npm run build` |
-| Start | `./node_modules/.bin/next start -p $PORT` |
+| Build | `npm ci && npm run build` + copy `public/` and `.next/static/` into the standalone output |
+| Start | `HOSTNAME=0.0.0.0 node .next/standalone/server.js` |
+
+This uses Next's **standalone** output (the project has `output: "standalone"` in
+`next.config.ts`). `next start` is not supported with that configuration, so the
+Blueprint runs the generated `server.js` directly. Render injects `PORT`, and
+`HOSTNAME` is forced to `0.0.0.0` so the server is reachable from the internet.
 | Region | Frankfurt |
 | Plan | Free |
 | Health check | `/login` |

@@ -6,9 +6,9 @@ services:
     runtime: node
     region: frankfurt
     plan: free
-    buildCommand: npm ci && npm run build
-    # Render injects PORT at runtime; Next must listen on that port.
-    startCommand: ./node_modules/.bin/next start -p $PORT
+    buildCommand: npm ci && npm run build && cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/
+    # Standalone server reads PORT (injected by Render); force 0.0.0.0 so it is publicly reachable.
+    startCommand: HOSTNAME=0.0.0.0 node .next/standalone/server.js
     healthCheckPath: /login
     envVars:
       - key: NODE_VERSION
