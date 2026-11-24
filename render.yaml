@@ -1,0 +1,19 @@
+# Render Blueprint for the BM Booking web portal.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: bmbooking-portfolio
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm ci && npm run build
+    # Render injects PORT at runtime; Next must listen on that port.
+    startCommand: ./node_modules/.bin/next start -p $PORT
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_PUBLIC_API_URL
+        value: https://bmbookingapi.possibletechplc.com
+      - key: NEXT_PUBLIC_TELEBIRR_URL
+        value: https://bmtelebirr.possibletechplc.com
