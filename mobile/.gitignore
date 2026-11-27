@@ -1,0 +1,13 @@
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+*.log
+
+# Android generated/local files
+android/.gradle/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
