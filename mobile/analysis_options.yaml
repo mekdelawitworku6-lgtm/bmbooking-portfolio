@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # Flutter 3.50 deprecated the material.dart export in favour of
+    # material_ui.dart, but the existing Material API remains supported.
+    deprecated_member_use: ignore

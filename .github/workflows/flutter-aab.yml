@@ -27,7 +27,7 @@ jobs:
       - name: Generate Android platform files if missing
         run: |
           flutter create --platforms=android --org com.possibletech --project-name bm_booking_app mobile
-          git checkout -- mobile/pubspec.yaml mobile/lib mobile/assets || true
+          git checkout -- mobile/pubspec.yaml mobile/lib mobile/assets mobile/analysis_options.yaml || true
           rm -rf mobile/test
           grep -q 'android.permission.INTERNET' mobile/android/app/src/main/AndroidManifest.xml || \
             sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET"/>' mobile/android/app/src/main/AndroidManifest.xml
